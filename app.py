@@ -25,8 +25,10 @@ load_dotenv()
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
+    force=True,
 )
 log = logging.getLogger(__name__)
+log.setLevel(logging.INFO)
 
 app = Flask(__name__)
 CORS(app)
@@ -147,16 +149,26 @@ def call_model(
                 temperature=0.7,
             )
             text = completion.choices[0].message.content.strip()
+            # Sanity check: if response looks like HTML, it's an error
+            if text.startswith("<!DOCTYPE") or text.startswith("<html"):
+                log.error("Model returned HTML instead of text (likely a 50x error page)")
+                return "[Model Error]: Service Unavailable"
             log.info("Model responded (%d chars)", len(text))
             return text
         except Exception as exc:
+            exc_str = str(exc)
+            # Check if error contains HTML markers or service error codes
+            if any(marker in exc_str for marker in ["<!DOCTYPE", "503", "504", "Service Unavailable", "Gateway Timeout", "<html"]):
+                log.error("HuggingFace service error detected in exception")
+                return "[Model Error]: Service Unavailable"
+
             if attempt < retries - 1:
                 wait_time = 2 ** attempt
                 log.warning("Model call failed (attempt %d): %s. Retrying in %ds...", attempt + 1, exc, wait_time)
                 time.sleep(wait_time)
             else:
                 log.error("Model call failed after %d attempts: %s", retries, exc)
-                return f"[Model Error]: {exc}"
+                return "[Model Error]: Service Unavailable"
 
 
 # ── LLM Judge — Safety Evaluation ─────────────────────────────────────────
@@ -311,6 +323,9 @@ def generate_guidance(level: str, user_answers: str) -> str:
     Returns:
         Plain-text coaching or challenge descriptions.
     """
+    # DEBUG: Print to verify this function is being called
+    import sys
+    print(f"DEBUG: generate_guidance called with level={level}", file=sys.stderr)
     if level == "beginner":
         system = (
             "You are a friendly programming tutor. "
@@ -338,29 +353,30 @@ def generate_guidance(level: str, user_answers: str) -> str:
             "For each: title, problem statement, acceptance criteria."
         )
     result = call_model(GUIDANCE_MODEL, system, user, max_tokens=600)
-    log.info("Guidance result length: %d chars, starts with: %s", len(result), result[:50])
+
+    # Define fallback responses
+    if level == "advanced":
+        fallback = (
+            "**Challenge 1: Data Structures & Algorithms**\n"
+            "Implement a binary search tree with insert, delete, and search operations.\n\n"
+            "**Challenge 2: REST API Design**\n"
+            "Design and build a RESTful API for a task management system with CRUD operations.\n\n"
+            "**Challenge 3: System Design**\n"
+            "Design a rate-limiting system that can handle millions of requests per second."
+        )
+    else:
+        fallback = (
+            "**Variables and Data Types**: Variables are containers for storing data values. "
+            "Python supports strings, integers, floats, and booleans.\n\n"
+            "**Loops**: Use `for` loops to iterate over sequences or `while` loops to repeat until a condition is false.\n\n"
+            "**Functions**: Functions are reusable blocks of code. Use `def` to define them and `return` to send back values."
+        )
+
     # Use fallback if result contains error markers
-    if "[Model Error]" in result or "<!DOCTYPE" in result:
+    if "[Model Error]" in result or "<!DOCTYPE" in result or "503" in result or "504" in result or "Service Unavailable" in result or "Gateway Timeout" in result or len(result) > 3000 or not result or result.startswith("["):
         log.warning("*** USING FALLBACK - detected error in guidance ***")
-        if level == "advanced":
-            fallback = (
-                "**Challenge 1: Data Structures & Algorithms**\n"
-                "Implement a binary search tree with insert, delete, and search operations.\n\n"
-                "**Challenge 2: REST API Design**\n"
-                "Design and build a RESTful API for a task management system with CRUD operations.\n\n"
-                "**Challenge 3: System Design**\n"
-                "Design a rate-limiting system that can handle millions of requests per second."
-            )
-        else:
-            fallback = (
-                "**Variables and Data Types**: Variables are containers for storing data values. "
-                "Python supports strings, integers, floats, and booleans.\n\n"
-                "**Loops**: Use `for` loops to iterate over sequences or `while` loops to repeat until a condition is false.\n\n"
-                "**Functions**: Functions are reusable blocks of code. Use `def` to define them and `return` to send back values."
-            )
-        log.warning("Guidance model unavailable; returning fallback response (%d chars)", len(fallback))
         return fallback
-    log.info("Guidance OK, returning result")
+
     return result
 
 
@@ -481,9 +497,10 @@ def evaluate_performance():
         # ── Call 2: Guidance ─────────────────────────────
         guidance = generate_guidance(level, user_answers)
 
-        # Clean up guidance if it contains error markers
-        if "[Model Error]" in guidance or "<!DOCTYPE" in guidance or "503" in guidance:
-            log.warning("Guidance contains error; replacing with fallback")
+        # Additional cleanup: if guidance still contains error markers despite fallback in generate_guidance
+        # This catches cases where error detection might have been missed
+        if "[Model Error]" in guidance or "<!DOCTYPE" in guidance or "503" in guidance or "504" in guidance or "Service Unavailable" in guidance or "Gateway Timeout" in guidance or guidance.startswith("["):
+            # Guidance generation failed - use safe fallback content
             if level == "advanced":
                 guidance = (
                     "**Challenge 1: Data Structures & Algorithms**\n"
@@ -519,6 +536,57 @@ def evaluate_performance():
             log.warning("Roadmap failed safety check: %s", roadmap_reason)
             roadmap = "Unable to generate roadmap at this time. Please try again."
 
+        # FINAL SANITY CHECK: Replace any remaining error content with fallbacks
+        # Check for HTML, error markers, or unusually long responses (errors are longer than normal guidance)
+        if not guidance or "[Model Error]" in guidance or "<!DOCTYPE" in guidance or "html" in guidance.lower() or "503" in guidance or len(guidance) > 2500:
+            if level == "beginner":
+                guidance = (
+                    "**Variables and Data Types**: Variables are containers for storing data values. "
+                    "Python supports strings, integers, floats, and booleans.\n\n"
+                    "**Loops**: Use `for` loops to iterate over sequences or `while` loops to repeat until a condition is false.\n\n"
+                    "**Functions**: Functions are reusable blocks of code. Use `def` to define them and `return` to send back values."
+                )
+            else:
+                guidance = (
+                    "**Challenge 1: Data Structures & Algorithms**\n"
+                    "Implement a binary search tree with insert, delete, and search operations.\n\n"
+                    "**Challenge 2: REST API Design**\n"
+                    "Design and build a RESTful API for a task management system with CRUD operations.\n\n"
+                    "**Challenge 3: System Design**\n"
+                    "Design a rate-limiting system that can handle millions of requests per second."
+                )
+
+        # ULTIMATE SAFEGUARD: If guidance contains HTML or error markers, use fallback
+        if ("<!DOCTYPE" in guidance or "[Model Error]" in guidance or
+            "html" in guidance.lower() or "503" in guidance or "504" in guidance or
+            (len(guidance) > 2000 and guidance.count("<") > 5)):
+
+            # Use safe fallback content
+            if level == "advanced":
+                guidance = (
+                    "**Challenge 1: Data Structures & Algorithms**\n"
+                    "Implement a binary search tree with insert, delete, and search operations. "
+                    "Must support insert, delete, and search operations in O(log n) average time.\n\n"
+                    "**Challenge 2: REST API Design**\n"
+                    "Design and build a RESTful API for a task management system. "
+                    "Include endpoints for CRUD operations with proper HTTP methods.\n\n"
+                    "**Challenge 3: System Design**\n"
+                    "Design a rate-limiting system that can handle millions of requests per second. "
+                    "Consider using token bucket or sliding window algorithms."
+                )
+            else:
+                guidance = (
+                    "**Variables and Data Types**\n"
+                    "Variables store data. Python has: strings (text), integers (whole numbers), "
+                    "floats (decimals), and booleans (True/False). Example: `name = 'Alice'` stores text.\n\n"
+                    "**Loops**\n"
+                    "Loops repeat code. `for` loops iterate over sequences: `for i in range(5): print(i)`. "
+                    "`while` loops repeat until a condition is false: `while x < 10: x += 1`.\n\n"
+                    "**Functions**\n"
+                    "Functions are reusable blocks of code. Define with `def`: `def greet(name): return f'Hello {name}'`. "
+                    "Call with `greet('Alice')`. Functions take inputs and return outputs."
+                )
+
         return jsonify({
             "success":      True,
             "score":        score,
@@ -550,7 +618,28 @@ def ratelimit_handler(e):
 @app.route("/")
 def health_check():
     """Health check endpoint — returns 200 when the server is running."""
-    return jsonify({"message": "AI Learning Coach API is running", "status": "ok"})
+    return jsonify({
+        "message": "AI Learning Coach API is running",
+        "status": "ok"
+    })
+
+
+@app.route("/test-endpoint", methods=["POST"])
+def test_endpoint():
+    """Test endpoint to verify Flask is routing requests."""
+    return jsonify({"status": "ok", "test": True})
+
+
+# ── Test endpoint to verify code reloading ─────────────────────────────────────
+
+@app.route("/test-reload")
+def test_reload():
+    """Test endpoint to verify the app module is using latest code."""
+    return jsonify({
+        "status": "ok",
+        "start_time": _START_TIME,
+        "message": "If you see this with a recent start_time, code reloading is working"
+    })
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────

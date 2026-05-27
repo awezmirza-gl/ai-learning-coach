@@ -277,6 +277,12 @@ export default function App() {
         return;
       }
 
+      // Sanity check: if guidance contains HTML, it's an error response
+      if (data.guidance && data.guidance.includes("<!DOCTYPE")) {
+        setError("Backend encountered a service error. Please try again in a moment.");
+        return;
+      }
+
       setResult(data);
     } catch (err) {
       // Network-level failure (CORS, backend not running, etc.)
@@ -331,10 +337,49 @@ export default function App() {
           {loading && <div style={styles.spinner} />}
         </div>
 
+        {/* ── Loading State Message ── */}
+        {loading && (
+          <div style={{
+            marginTop: 24,
+            padding: "18px 20px",
+            background: "#1a2e3a",
+            border: "1px solid #0f4c5c",
+            borderRadius: 8,
+            color: "#38bdf8",
+            fontSize: 14,
+            textAlign: "center",
+            animation: "fadeUp 0.4s ease both",
+            lineHeight: 1.6
+          }} className="fade-up">
+            <div style={{ marginBottom: 8 }}>🤖 AI Coach is analyzing your knowledge...</div>
+            <div style={{ fontSize: 12, color: "#6b7280" }}>This usually takes a few seconds</div>
+          </div>
+        )}
+
         {/* ── Error ── */}
         {error && (
           <div style={styles.errorBox} className="fade-up">
-            ⚠ {error}
+            <div style={{ display: "flex", alignItems: "flex-start", gap: 12 }}>
+              <span style={{ fontSize: 24 }}>⚠️</span>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontWeight: 600, marginBottom: 6 }}>
+                  {error.includes("10 per hour") && "Rate Limit Reached"}
+                  {error.includes("too short") && "Input Too Short"}
+                  {error.includes("sensitive") && "Sensitive Information Detected"}
+                  {error.includes("backend") && "Backend Error"}
+                  {error.includes("incomplete") && "Incomplete Response"}
+                  {!error.includes("10 per hour") && !error.includes("too short") && !error.includes("sensitive") && !error.includes("backend") && !error.includes("incomplete") && "Something Went Wrong"}
+                </div>
+                <div style={{ fontSize: 14, lineHeight: 1.6, color: "#fca5a5" }}>
+                  {error.includes("10 per hour") && "You've used all your evaluations for this hour. Come back later to continue your learning journey!"}
+                  {error.includes("too short") && "Please share a bit more about what you know. At least 10 characters helps us understand your knowledge better."}
+                  {error.includes("sensitive") && "We detected personal information in your response. Please remove emails, phone numbers, or other sensitive data and try again."}
+                  {error.includes("backend") && "Our AI coach is taking a short break. Please try again in a moment."}
+                  {error.includes("incomplete") && "We received an incomplete response from our AI. Please try your evaluation again."}
+                  {!error.includes("10 per hour") && !error.includes("too short") && !error.includes("sensitive") && !error.includes("backend") && !error.includes("incomplete") && error}
+                </div>
+              </div>
+            </div>
           </div>
         )}
 
