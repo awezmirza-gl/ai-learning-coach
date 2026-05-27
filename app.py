@@ -38,7 +38,7 @@ FLASK_DEBUG  = os.getenv("FLASK_DEBUG", "false").lower() == "true"
 MAX_ANSWER_LENGTH = 5_000   # characters — prevents prompt-injection bloat
 
 ANALYSIS_MODEL = "mistralai/Mistral-7B-Instruct-v0.2:featherless-ai"
-GUIDANCE_MODEL = "HuggingFaceH4/zephyr-7b-beta:featherless-ai"
+GUIDANCE_MODEL = "mistralai/Mistral-7B-Instruct-v0.2:featherless-ai"
 
 # ── HuggingFace Router client (OpenAI-compatible) ────────────────────────────
 client = OpenAI(
@@ -108,37 +108,46 @@ def call_model(
     system_prompt: str,
     user_prompt: str,
     max_tokens: int = 512,
+    retries: int = 3,
 ) -> str:
     """
-    Call the HuggingFace router via OpenAI-compatible SDK.
+    Call the HuggingFace router via OpenAI-compatible SDK with retry logic.
 
     Args:
         model:         Full model identifier including provider suffix.
         system_prompt: Persona and output-format instructions.
         user_prompt:   Actual learner data / task input.
         max_tokens:    Upper bound on generated tokens.
+        retries:       Number of retry attempts for transient failures.
 
     Returns:
         Generated text string, or an error string prefixed with '[Model Error]'.
         Never raises — callers check the prefix to detect failures.
     """
-    try:
-        log.info("Calling model: %s (max_tokens=%d)", model, max_tokens)
-        completion = client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user",   "content": user_prompt},
-            ],
-            max_tokens=max_tokens,
-            temperature=0.7,
-        )
-        text = completion.choices[0].message.content.strip()
-        log.info("Model responded (%d chars)", len(text))
-        return text
-    except Exception as exc:
-        log.error("Model call failed: %s", exc)
-        return f"[Model Error]: {exc}"
+    import time
+    for attempt in range(retries):
+        try:
+            log.info("Calling model: %s (max_tokens=%d, attempt %d)", model, max_tokens, attempt + 1)
+            completion = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user",   "content": user_prompt},
+                ],
+                max_tokens=max_tokens,
+                temperature=0.7,
+            )
+            text = completion.choices[0].message.content.strip()
+            log.info("Model responded (%d chars)", len(text))
+            return text
+        except Exception as exc:
+            if attempt < retries - 1:
+                wait_time = 2 ** attempt
+                log.warning("Model call failed (attempt %d): %s. Retrying in %ds...", attempt + 1, exc, wait_time)
+                time.sleep(wait_time)
+            else:
+                log.error("Model call failed after %d attempts: %s", retries, exc)
+                return f"[Model Error]: {exc}"
 
 
 def safe_extract_analysis(raw_text: str) -> dict | None:
@@ -245,7 +254,31 @@ def generate_guidance(level: str, user_answers: str) -> str:
             "3. System Design or Performance Optimization\n\n"
             "For each: title, problem statement, acceptance criteria."
         )
-    return call_model(GUIDANCE_MODEL, system, user, max_tokens=600)
+    result = call_model(GUIDANCE_MODEL, system, user, max_tokens=600)
+    log.info("Guidance result length: %d chars, starts with: %s", len(result), result[:50])
+    # Use fallback if result contains error markers
+    if "[Model Error]" in result or "<!DOCTYPE" in result:
+        log.warning("*** USING FALLBACK - detected error in guidance ***")
+        if level == "advanced":
+            fallback = (
+                "**Challenge 1: Data Structures & Algorithms**\n"
+                "Implement a binary search tree with insert, delete, and search operations.\n\n"
+                "**Challenge 2: REST API Design**\n"
+                "Design and build a RESTful API for a task management system with CRUD operations.\n\n"
+                "**Challenge 3: System Design**\n"
+                "Design a rate-limiting system that can handle millions of requests per second."
+            )
+        else:
+            fallback = (
+                "**Variables and Data Types**: Variables are containers for storing data values. "
+                "Python supports strings, integers, floats, and booleans.\n\n"
+                "**Loops**: Use `for` loops to iterate over sequences or `while` loops to repeat until a condition is false.\n\n"
+                "**Functions**: Functions are reusable blocks of code. Use `def` to define them and `return` to send back values."
+            )
+        log.warning("Guidance model unavailable; returning fallback response (%d chars)", len(fallback))
+        return fallback
+    log.info("Guidance OK, returning result")
+    return result
 
 
 # ── LLM Call 3 — 4-week roadmap  (Mistral) ───────────────────────────────────
@@ -363,6 +396,26 @@ def evaluate_performance():
 
         # ── Call 2: Guidance ─────────────────────────────
         guidance = generate_guidance(level, user_answers)
+
+        # Clean up guidance if it contains error markers
+        if "[Model Error]" in guidance or "<!DOCTYPE" in guidance or "503" in guidance:
+            log.warning("Guidance contains error; replacing with fallback")
+            if level == "advanced":
+                guidance = (
+                    "**Challenge 1: Data Structures & Algorithms**\n"
+                    "Implement a binary search tree with insert, delete, and search operations.\n\n"
+                    "**Challenge 2: REST API Design**\n"
+                    "Design and build a RESTful API for a task management system with CRUD operations.\n\n"
+                    "**Challenge 3: System Design**\n"
+                    "Design a rate-limiting system that can handle millions of requests per second."
+                )
+            else:
+                guidance = (
+                    "**Variables and Data Types**: Variables are containers for storing data values. "
+                    "Python supports strings, integers, floats, and booleans.\n\n"
+                    "**Loops**: Use `for` loops to iterate over sequences or `while` loops to repeat until a condition is false.\n\n"
+                    "**Functions**: Functions are reusable blocks of code. Use `def` to define them and `return` to send back values."
+                )
 
         # ── Call 3: Roadmap ──────────────────────────────
         roadmap = generate_roadmap(score, level)
