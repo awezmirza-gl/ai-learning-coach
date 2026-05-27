@@ -251,13 +251,27 @@ export default function App() {
       const data = await response.json().catch(() => null);
 
       if (!response.ok || !data) {
-        const msg = data?.error || `Server error (${response.status}). Is the backend running on port 5000?`;
+        let msg = `Server error (${response.status}).`;
+        if (response.status === 400) {
+          msg += " Your input may be too short or contain sensitive information.";
+        } else if (response.status === 500) {
+          msg += " The backend encountered an error. Check the logs or try again.";
+        } else {
+          msg += " Is the backend running on port 5000?";
+        }
+        if (data?.error) msg = data.error;
         setError(msg);
         return;
       }
 
       if (!data.success) {
         setError(data.error || "The AI backend returned an unsuccessful response.");
+        return;
+      }
+
+      // Validate that we have essential fields (score can be 0, so check !== undefined)
+      if (data.score === undefined || !data.level || !data.guidance || !data.roadmap) {
+        setError("Backend returned incomplete response. Please try again.");
         return;
       }
 
@@ -274,6 +288,9 @@ export default function App() {
   };
 
   const roadmapSteps = result ? parseRoadmap(result.roadmap) : [];
+
+  // Detect if guidance is a fallback (doesn't start with model error, is plain text)
+  const isFallbackGuidance = result && !result.guidance.includes("[Model Error]") && result.guidance.includes("**");
 
   return (
     <div style={styles.root}>
@@ -367,16 +384,23 @@ export default function App() {
               )}
               className="fade-up"
             >
-              <span
-                style={styles.cardLabel(
-                  result.responseType === "beginner_explanation" ? "#fb923c" : "#34d399"
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <span
+                  style={styles.cardLabel(
+                    result.responseType === "beginner_explanation" ? "#fb923c" : "#34d399"
+                  )}
+                >
+                  Step 2 ·{" "}
+                  {result.responseType === "beginner_explanation"
+                    ? "Beginner Coaching Path"
+                    : "Advanced Challenge Path"}
+                </span>
+                {isFallbackGuidance && (
+                  <span style={{ fontSize: 11, color: "#9ca3af", fontStyle: "italic" }}>
+                    ℹ curated guidance
+                  </span>
                 )}
-              >
-                Step 2 ·{" "}
-                {result.responseType === "beginner_explanation"
-                  ? "Beginner Coaching Path"
-                  : "Advanced Challenge Path"}
-              </span>
+              </div>
               <pre style={styles.pre}>
                 {result.guidance || "No guidance returned from model."}
               </pre>
