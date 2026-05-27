@@ -57,6 +57,59 @@ client = OpenAI(
     api_key=HF_TOKEN,
 )
 
+# ── Question Store (In-Memory) ───────────────────────────────────────────────
+question_store = {
+    "beginner": [
+        {
+            "id": 1,
+            "question": "What is a variable in Python?",
+            "options": [
+                "A reserved keyword in Python.",
+                "A named storage location for data.",
+                "A type of loop.",
+                "A function that returns a value."
+            ],
+            "correct_answer": "A named storage location for data."
+        },
+        {
+            "id": 2,
+            "question": "Which of the following is a valid way to create a 'for' loop in Python?",
+            "options": [
+                "for x in range(10):",
+                "for (x = 0; x < 10; x++)",
+                "loop x from 1 to 10:",
+                "foreach x in list:"
+            ],
+            "correct_answer": "for x in range(10):"
+        }
+    ],
+    "advanced": [
+        {
+            "id": 3,
+            "question": "What is a decorator in Python?",
+            "options": [
+                "A way to add comments to your code.",
+                "A function that takes another function and extends its behavior without explicitly modifying it.",
+                "A built-in data structure for storing key-value pairs.",
+                "A method for styling the output of your code."
+            ],
+            "correct_answer": "A function that takes another function and extends its behavior without explicitly modifying it."
+        },
+        {
+            "id": 4,
+            "question": "What is the Global Interpreter Lock (GIL) in CPython?",
+            "options": [
+                "A lock that prevents multiple threads from executing Python bytecodes at the same time.",
+                "A tool for debugging Python code.",
+                "A security feature that prevents unauthorized access to your code.",
+                "A way to speed up your Python programs."
+            ],
+            "correct_answer": "A lock that prevents multiple threads from executing Python bytecodes at the same time."
+        }
+    ]
+}
+
+
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -413,6 +466,21 @@ def generate_roadmap(score: int, level: str) -> str:
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
+
+@app.route("/api/quiz", methods=["GET"])
+def get_quiz():
+    """
+    Returns a list of quiz questions based on the provided level.
+    Query Params:
+        level (str): 'beginner' or 'advanced'
+    """
+    level = request.args.get("level", "beginner")
+    if level not in ["beginner", "advanced"]:
+        level = "beginner"
+    
+    questions = question_store.get(level, [])
+    return jsonify({"success": True, "questions": questions})
+
 
 @app.route("/api/evaluate", methods=["POST"])
 @limiter.limit("10 per hour")  # Max 10 evaluations per hour per IP

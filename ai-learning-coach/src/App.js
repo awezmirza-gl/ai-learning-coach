@@ -1,7 +1,9 @@
 // App.jsx
 import { useState } from "react";
+import Quiz from "./Quiz";
 
 const API_URL = "http://localhost:5000/api/evaluate";
+const QUIZ_API_URL = "http://localhost:5000/api/quiz";
 
 // ── Inline styles as constants to keep JSX clean ──────────────────────────────
 const styles = {
@@ -229,6 +231,7 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(null);
   const [error, setError] = useState("");
+  const [quizQuestions, setQuizQuestions] = useState(null);
 
   const handleSubmit = async () => {
     if (answers.trim().length < 10) {
@@ -284,6 +287,14 @@ export default function App() {
       }
 
       setResult(data);
+
+      // Fetch quiz questions based on the level
+      const quizResponse = await fetch(`${QUIZ_API_URL}?level=${data.level}`);
+      const quizData = await quizResponse.json();
+      if (quizData.success && quizData.questions) {
+        setQuizQuestions(quizData.questions);
+      }
+
     } catch (err) {
       // Network-level failure (CORS, backend not running, etc.)
       setError(
@@ -474,6 +485,10 @@ export default function App() {
             </div>
 
           </div>
+        )}
+
+        {quizQuestions && (
+            <Quiz questions={quizQuestions} />
         )}
       </main>
     </div>
