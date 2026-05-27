@@ -14,6 +14,8 @@ import re
 
 from flask import Flask, request, jsonify
 from flask_cors import CORS
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 from openai import OpenAI
 from dotenv import load_dotenv
 
@@ -28,6 +30,13 @@ log = logging.getLogger(__name__)
 
 app = Flask(__name__)
 CORS(app)
+
+# ── Rate Limiting ─────────────────────────────────────────────────────────────
+limiter = Limiter(
+    app=app,
+    key_func=get_remote_address,
+    default_limits=["200 per day", "50 per hour"]
+)
 
 # ── Config ────────────────────────────────────────────────────────────────────
 HF_TOKEN = os.getenv("HF_TOKEN")
@@ -316,6 +325,7 @@ def generate_roadmap(score: int, level: str) -> str:
 # ── Routes ────────────────────────────────────────────────────────────────────
 
 @app.route("/api/evaluate", methods=["POST"])
+@limiter.limit("10 per hour")  # Max 10 evaluations per hour per IP
 def evaluate_performance():
     """
     Main evaluation endpoint.
@@ -433,6 +443,18 @@ def evaluate_performance():
     except Exception as exc:
         log.exception("Unhandled error in /api/evaluate")
         return jsonify({"success": False, "error": str(exc)}), 500
+
+
+# ── Error Handlers ───────────────────────────────────────────────────────────
+
+@app.errorhandler(429)
+def ratelimit_handler(e):
+    """Handle rate limit exceeded (429) errors with user-friendly message."""
+    log.warning("Rate limit exceeded: %s", e.description)
+    return jsonify({
+        "success": False,
+        "error": "You've exceeded your evaluation limit (10 per hour). Please try again later."
+    }), 429
 
 
 @app.route("/")

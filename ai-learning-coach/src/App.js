@@ -254,6 +254,8 @@ export default function App() {
         let msg = `Server error (${response.status}).`;
         if (response.status === 400) {
           msg += " Your input may be too short or contain sensitive information.";
+        } else if (response.status === 429) {
+          msg += " You've exceeded your evaluation limit (10 per hour). Please try again later.";
         } else if (response.status === 500) {
           msg += " The backend encountered an error. Check the logs or try again.";
         } else {
